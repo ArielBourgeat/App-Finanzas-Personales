@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#070707" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Finanzas" />
+  <meta name="description" content="App de finanzas personales. Se guarda en este dispositivo." />
+  <title>Finanzas</title>
+  <script>
+    (function () {
+      try {
+        var db = JSON.parse(localStorage.getItem("finanzas-app-v1") || "{}");
+        document.documentElement.dataset.mode = db && db.settings && db.settings.setupComplete ? "app" : "setup";
+      } catch (e) {
+        document.documentElement.dataset.mode = "setup";
+      }
+    })();
+  </script>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <div id="onboarding" class="onboarding hidden">
+    <div class="onboarding-card">
+      <p class="step-kicker" id="setup-kicker">Paso 1 de 4</p>
+      <div id="setup-step"></div>
+      <div class="onboarding-nav">
+        <button class="btn ghost hidden" type="button" data-action="setup-back" id="setup-back">Atrás</button>
+        <button class="btn primary" type="button" data-action="setup-next" id="setup-next">Seguir</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div>
+        <p class="brand">Finanzas</p>
+        <p class="hello" id="hello"></p>
+      </div>
+      <div class="topbar-right">
+        <button class="month-nav" type="button" data-action="prev-month" aria-label="Mes anterior">‹</button>
+        <span id="month-label"></span>
+        <button class="month-nav" type="button" data-action="next-month" aria-label="Mes siguiente">›</button>
+        <span class="today-label" id="today-label"></span>
+      </div>
+    </header>
+
+    <nav class="tabs" id="desktop-tabs">
+      <button type="button" class="tab" data-action="view" data-view="dashboard">Inicio</button>
+      <button type="button" class="tab" data-action="view" data-view="reports" data-feature="reports">Reportes</button>
+      <button type="button" class="tab" data-action="view" data-view="debts" data-feature="debts">Deudas</button>
+      <button type="button" class="tab" data-action="view" data-view="upcoming" data-feature="upcoming">Próximos</button>
+      <button type="button" class="tab" data-action="view" data-view="settings">Ajustes</button>
+    </nav>
+
+    <section id="install-banner" class="install-banner hidden">
+      <div>
+        <strong>Agregar al iPhone</strong>
+        <p>En Safari: Compartir → Agregar a pantalla de inicio.</p>
+      </div>
+      <button type="button" class="btn ghost compact" data-action="dismiss-install">Ok</button>
+    </section>
+
+    <main id="view-dashboard" class="view dashboard">
+      <aside class="card form-card" id="form-card">
+        <h2>Cargar movimiento</h2>
+        <div class="segmented" id="type-toggle">
+          <button type="button" class="seg on" data-action="set-type" data-type="expense">Gasto</button>
+          <button type="button" class="seg" data-action="set-type" data-type="income">Ingreso</button>
+        </div>
+        <label class="amount-wrap">
+          <span>$</span>
+          <input id="amount" inputmode="decimal" autocomplete="off" placeholder="0" />
+        </label>
+        <div class="chips" id="category-chips"></div>
+        <label class="field">
+          <span>Fecha de consumo / movimiento</span>
+          <input type="date" id="move-date" />
+        </label>
+        <label class="field" id="payment-date-wrap">
+          <span>Fecha de pago (opcional)</span>
+          <input type="date" id="payment-date" />
+        </label>
+        <label class="field">
+          <span>Nota (opcional)</span>
+          <input type="text" id="note" maxlength="80" placeholder="ej. supermercado del sábado" />
+        </label>
+        <button class="btn add" type="button" data-action="add-movement" id="add-btn">Agregar</button>
+      </aside>
+
+      <section class="center-col">
+        <div class="kpis">
+          <article class="card kpi">
+            <p>Ingresos del mes</p>
+            <strong id="kpi-income">$ 0</strong>
+          </article>
+          <article class="card kpi">
+            <p>Gastos del mes</p>
+            <strong id="kpi-expense">$ 0</strong>
+          </article>
+          <article class="card kpi remain">
+            <p>Te queda</p>
+            <strong id="kpi-remain">$ 0</strong>
+          </article>
+        </div>
+
+        <div class="charts">
+          <article class="card chart-card">
+            <h3>Gastos por categoría</h3>
+            <div class="donut-wrap">
+              <canvas id="donut"></canvas>
+              <ul class="legend" id="legend"></ul>
+            </div>
+          </article>
+          <article class="card chart-card">
+            <h3>Últimos 6 meses</h3>
+            <canvas id="bars" class="bars-canvas"></canvas>
+          </article>
+        </div>
+
+        <article class="card predict-card" id="predict-card">
+          <div>
+            <h3>Predicción del mes</h3>
+            <p id="predict-copy"></p>
+          </div>
+          <strong id="predict-value"></strong>
+        </article>
+
+        <article class="card budgets-card" id="budgets-card">
+          <div class="row-head">
+            <h3>Presupuestos por categoría</h3>
+            <p>Se marca con acento si te pasás</p>
+          </div>
+          <div class="budgets" id="budgets"></div>
+        </article>
+      </section>
+
+      <aside class="card movements-card">
+        <div class="row-head">
+          <h3>Movimientos del mes</h3>
+          <select id="move-filter">
+            <option value="all">Todas</option>
+            <option value="expense">Gastos</option>
+            <option value="income">Ingresos</option>
+            <option value="unpaid">A pagar</option>
+          </select>
+        </div>
+        <ul class="moves" id="moves"></ul>
+      </aside>
+    </main>
+
+    <main id="view-reports" class="view hidden">
+      <article class="card">
+        <div class="row-head">
+          <h2>Reportes</h2>
+          <div class="segmented small" id="report-period">
+            <button type="button" class="seg" data-action="report-period" data-period="day">Diario</button>
+            <button type="button" class="seg on" data-action="report-period" data-period="week">Semanal</button>
+            <button type="button" class="seg" data-action="report-period" data-period="month">Mensual</button>
+            <button type="button" class="seg" data-action="report-period" data-period="year">Anual</button>
+          </div>
+        </div>
+        <div class="report-nav">
+          <button class="month-nav" type="button" data-action="report-prev">‹</button>
+          <h3 id="report-title"></h3>
+          <button class="month-nav" type="button" data-action="report-next">›</button>
+        </div>
+        <div class="kpis compact-kpis">
+          <article class="kpi mini"><p>Ingresos</p><strong id="rep-income"></strong></article>
+          <article class="kpi mini"><p>Gastos</p><strong id="rep-expense"></strong></article>
+          <article class="kpi mini remain"><p>Balance</p><strong id="rep-balance"></strong></article>
+        </div>
+        <canvas id="report-chart" class="report-canvas"></canvas>
+        <ul class="legend wrap" id="report-legend"></ul>
+        <ul class="moves" id="report-moves"></ul>
+      </article>
+    </main>
+
+    <main id="view-debts" class="view hidden">
+      <article class="card">
+        <div class="row-head">
+          <h2>Deudas</h2>
+        </div>
+        <form class="debt-form" id="debt-form">
+          <input name="name" required placeholder="Nombre (tarjeta, préstamo...)" />
+          <input name="total" inputmode="decimal" required placeholder="Monto total" />
+          <input name="remaining" inputmode="decimal" placeholder="Saldo actual" />
+          <input name="dueDate" type="date" required />
+          <input name="note" placeholder="Nota" />
+          <button class="btn primary" type="submit">Agregar deuda</button>
+        </form>
+        <ul class="debt-list" id="debt-list"></ul>
+      </article>
+    </main>
+
+    <main id="view-upcoming" class="view hidden">
+      <article class="card">
+        <div class="row-head">
+          <h2>Ingresos y pagos próximos</h2>
+        </div>
+        <form class="upcoming-form" id="upcoming-form">
+          <select name="type">
+            <option value="income">Ingreso próximo</option>
+            <option value="payment">Fecha de pago</option>
+            <option value="expense">Gasto esperado</option>
+          </select>
+          <input name="name" required placeholder="Ej. Sueldo, tarjeta Visa" />
+          <input name="amount" inputmode="decimal" required placeholder="Monto" />
+          <input name="date" type="date" required />
+          <label class="check">
+            <input type="checkbox" name="recurring" />
+            Se repite cada mes
+          </label>
+          <button class="btn primary" type="submit">Agregar</button>
+        </form>
+        <ul class="upcoming-list" id="upcoming-list"></ul>
+      </article>
+    </main>
+
+    <main id="view-settings" class="view hidden">
+      <article class="card settings-card">
+        <h2>Ajustes</h2>
+        <label class="field">
+          <span>Nombre</span>
+          <input id="set-name" type="text" />
+        </label>
+        <label class="field">
+          <span>Moneda</span>
+          <select id="set-currency">
+            <option value="ARS">Peso argentino (ARS)</option>
+            <option value="USD">Dólar (USD)</option>
+            <option value="EUR">Euro (EUR)</option>
+            <option value="UYU">Peso uruguayo (UYU)</option>
+            <option value="CLP">Peso chileno (CLP)</option>
+            <option value="MXN">Peso mexicano (MXN)</option>
+            <option value="COP">Peso colombiano (COP)</option>
+            <option value="BRL">Real (BRL)</option>
+          </select>
+        </label>
+        <fieldset class="features">
+          <legend>Qué registrar</legend>
+          <label><input type="checkbox" data-feature="expenses" /> Gastos</label>
+          <label><input type="checkbox" data-feature="income" /> Ingresos</label>
+          <label><input type="checkbox" data-feature="budgets" /> Presupuestos</label>
+          <label><input type="checkbox" data-feature="debts" /> Deudas</label>
+          <label><input type="checkbox" data-feature="upcoming" /> Fechas de pago e ingresos próximos</label>
+          <label><input type="checkbox" data-feature="reports" /> Reportes</label>
+          <label><input type="checkbox" data-feature="prediction" /> Predicción mensual</label>
+        </fieldset>
+        <fieldset class="salary-box">
+          <legend>Ingreso fijo</legend>
+          <label class="check"><input type="checkbox" id="salary-enabled" /> Tengo un sueldo o ingreso mensual</label>
+          <input id="salary-label" placeholder="Nombre (Sueldo)" />
+          <input id="salary-amount" inputmode="decimal" placeholder="Monto" />
+          <label class="field">
+            <span>Día del mes en que cobra</span>
+            <input id="salary-day" type="number" min="1" max="28" />
+          </label>
+        </fieldset>
+        <div class="settings-actions">
+          <button class="btn" type="button" data-action="export">Exportar backup</button>
+          <label class="btn ghost file-btn">Importar backup<input type="file" id="import-file" accept="application/json" hidden /></label>
+          <button class="btn danger" type="button" data-action="reset">Borrar todo</button>
+        </div>
+        <p class="hint">
+          Los datos viven en este celular o computadora (localStorage), no en GitHub.
+          Si borrás el historial del navegador, se pierde. En iPhone: Safari → Compartir → Agregar a pantalla de inicio.
+        </p>
+      </article>
+    </main>
+
+    <button class="fab" type="button" data-action="open-sheet" aria-label="Agregar movimiento">+</button>
+
+    <nav class="mobile-nav">
+      <button type="button" data-action="view" data-view="dashboard">Inicio</button>
+      <button type="button" data-action="view" data-view="reports" data-feature="reports">Reportes</button>
+      <button type="button" data-action="view" data-view="debts" data-feature="debts">Deudas</button>
+      <button type="button" data-action="view" data-view="upcoming" data-feature="upcoming">Próx.</button>
+      <button type="button" data-action="view" data-view="settings">Ajustes</button>
+    </nav>
+  </div>
+
+  <div id="sheet" class="sheet hidden">
+    <button class="sheet-backdrop" type="button" data-action="close-sheet"></button>
+    <div class="sheet-panel" id="sheet-panel"></div>
+  </div>
+
+  <dialog id="edit-dialog" class="dialog">
+    <form method="dialog" id="edit-form" class="card dialog-card">
+      <h3>Editar movimiento</h3>
+      <input type="hidden" name="moveId" />
+      <label class="field"><span>Monto</span><input name="amount" inputmode="decimal" required /></label>
+      <label class="field"><span>Fecha</span><input name="date" type="date" required /></label>
+      <label class="field"><span>Fecha de pago</span><input name="paymentDate" type="date" /></label>
+      <label class="field"><span>Nota</span><input name="note" maxlength="80" /></label>
+      <menu>
+        <button class="btn ghost" value="cancel" type="submit">Cancelar</button>
+        <button class="btn danger" value="delete" type="submit">Borrar</button>
+        <button class="btn primary" value="save" type="submit">Guardar</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
