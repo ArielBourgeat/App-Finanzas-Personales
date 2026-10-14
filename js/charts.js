@@ -6,13 +6,16 @@ function sizeCanvas(canvas) {
   canvas.width = width * dpr;
   canvas.height = height * dpr;
   const ctx = canvas.getContext("2d");
+  if (!ctx) return { ctx: null, width, height };
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   return { ctx, width, height };
 }
 
-export function drawDonut(canvas, segments, centerLabel, centerSub) {
+function drawDonut(canvas, segments, centerLabel, centerSub) {
+  if (!canvas) return;
   const { ctx, width, height } = sizeCanvas(canvas);
+  if (!ctx) return;
   const cx = width / 2;
   const cy = height / 2;
   const radius = Math.min(width, height) * 0.38;
@@ -50,8 +53,10 @@ export function drawDonut(canvas, segments, centerLabel, centerSub) {
   ctx.fillText(centerSub || "gastos", cx, cy + 12);
 }
 
-export function drawBars(canvas, items) {
+function drawBars(canvas, items) {
+  if (!canvas) return;
   const { ctx, width, height } = sizeCanvas(canvas);
+  if (!ctx) return;
   const max = Math.max(1, ...items.map((item) => item.value));
   const padX = 8;
   const padTop = 22;
@@ -83,8 +88,10 @@ export function drawBars(canvas, items) {
   }
 }
 
-export function drawWeekBars(canvas, items) {
+function drawWeekBars(canvas, items) {
+  if (!canvas) return;
   const { ctx, width, height } = sizeCanvas(canvas);
+  if (!ctx) return;
   const max = Math.max(1, ...items.map((item) => item.value));
   const padX = 6;
   const padTop = 16;

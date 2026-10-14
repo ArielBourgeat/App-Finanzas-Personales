@@ -1,15 +1,14 @@
-import { load, save, uid, exportJson, importJson, clearAll, createInitialState, DEFAULT_EXPENSE_CATEGORIES } from "./storage.js";
-import { drawDonut, drawBars, drawWeekBars } from "./charts.js";
-
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const MONTHS_SHORT = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 const WEEKDAYS = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+const COMMON_BANKS = ["Banco Nación","Galicia","Santander","BBVA","Macro","Provincia","Brubank","Mercado Pago","Ualá","Efectivo"];
 
 let db = load();
 const ui = {
   view: "dashboard",
   type: "expense",
   categoryId: "",
+  bankId: "",
   month: ymNow(),
   reportPeriod: "month",
   reportAnchor: todayISO(),
@@ -52,6 +51,38 @@ function money(n) {
   } catch {
     return "$ " + Math.round(value).toLocaleString("es-AR");
   }
+}
+
+function hiddenMoney() {
+  return "$****";
+}
+
+function moneyOrHidden(n) {
+  return db.settings.hideRemain ? hiddenMoney() : money(n);
+}
+
+function banks() {
+  return Array.isArray(db.banks) ? db.banks : [];
+}
+
+function bankById(id) {
+  return banks().find((b) => b.id === id);
+}
+
+function applyBankDelta(bankId, type, amount) {
+  const bank = bankById(bankId);
+  const value = Number(amount) || 0;
+  if (!bank || !value) return;
+  bank.balance = (Number(bank.balance) || 0) + (type === "income" ? value : -value);
+}
+
+function remainAmount() {
+  const list = banks();
+  if (ui.bankId) {
+    const bank = bankById(ui.bankId);
+    return bank ? Number(bank.balance) || 0 : 0;
+  }
+  return list.reduce((sum, bank) => sum + (Number(bank.balance) || 0), 0);
 }
 
 function parseAmount(str) {
@@ -100,6 +131,12 @@ function inRange(iso, from, to) {
 function movementsInMonth(ym, type) {
   const { from, to } = monthRange(ym);
   return db.movements.filter((m) => inRange(m.date, from, to) && (!type || m.type === type));
+}
+
+function movementsScoped(ym, type) {
+  let list = movementsInMonth(ym, type);
+  if (ui.bankId) list = list.filter((m) => m.bankId === ui.bankId);
+  return list;
 }
 
 function sum(list, key = "amount") {
@@ -226,8 +263,8 @@ function prediction() {
   const today = new Date();
   const isCurrent = now === ymNow();
   const day = isCurrent ? today.getDate() : daysInMonth;
-  const expenses = sum(movementsInMonth(now, "expense"));
-  const income = sum(movementsInMonth(now, "income"));
+  const expenses = sum(movementsScoped(now, "expense"));
+  const income = sum(movementsScoped(now, "income"));
   const avgDaily = day ? expenses / day : 0;
   const projectedExpenses = isCurrent ? avgDaily * daysInMonth : expenses;
   const upcomingIncome = allUpcoming()
@@ -235,7 +272,7 @@ function prediction() {
     .reduce((acc, u) => acc + Number(u.amount || 0), 0);
   const projectedIncome = income + upcomingIncome;
   const prev = [];
-  for (let i = 1; i <= 3; i += 1) prev.push(sum(movementsInMonth(shiftMonth(now, -i), "expense")));
+  for (let i = 1; i <= 3; i += 1) prev.push(sum(movementsScoped(shiftMonth(now, -i), "expense")));
   const avgPrev = prev.reduce((a, b) => a + b, 0) / (prev.filter((v) => v > 0).length || 1);
   return {
     projectedExpenses,
@@ -253,8 +290,11 @@ function setView(view) {
 
 function render() {
   const setup = !db.settings.setupComplete;
-  $("onboarding").classList.toggle("hidden", !setup);
-  $("app").classList.toggle("hidden", setup);
+  document.documentElement.dataset.mode = setup ? "setup" : "app";
+  const onboarding = $("onboarding");
+  const app = $("app");
+  if (onboarding) onboarding.classList.toggle("hidden", !setup);
+  if (app) app.classList.toggle("hidden", setup);
   if (setup) {
     renderSetup();
     return;
@@ -274,11 +314,15 @@ function render() {
   });
   fillForm();
   renderInstall();
-  if (ui.view === "dashboard") renderDashboard();
-  if (ui.view === "reports") renderReports();
-  if (ui.view === "debts") renderDebts();
-  if (ui.view === "upcoming") renderUpcoming();
-  if (ui.view === "settings") renderSettings();
+  try {
+    if (ui.view === "dashboard") renderDashboard();
+    if (ui.view === "reports") renderReports();
+    if (ui.view === "debts") renderDebts();
+    if (ui.view === "upcoming") renderUpcoming();
+    if (ui.view === "settings") renderSettings();
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 function renderInstall() {
@@ -288,9 +332,11 @@ function renderInstall() {
 }
 
 function renderChips() {
+  const box = $("category-chips");
+  if (!box) return;
   const list = cats(ui.type);
   if (!list.some((c) => c.id === ui.categoryId)) ui.categoryId = list[0]?.id || "";
-  $("category-chips").innerHTML = list.map((c) => (
+  box.innerHTML = list.map((c) => (
     `<button type="button" class="chip ${c.id === ui.categoryId ? "on" : ""}" data-action="cat" data-id="${c.id}">${esc(c.name)}</button>`
   )).join("");
 }
@@ -299,21 +345,64 @@ function fillForm() {
   if (!feature("income")) ui.type = "expense";
   if (!feature("expenses")) ui.type = "income";
   const typeWrap = $("type-toggle");
-  typeWrap.querySelectorAll(".seg").forEach((b) => {
-    b.classList.toggle("on", b.dataset.type === ui.type);
-    b.classList.toggle("hidden", (b.dataset.type === "income" && !feature("income")) || (b.dataset.type === "expense" && !feature("expenses")));
-  });
-  $("payment-date-wrap").classList.toggle("hidden", ui.type !== "expense" || !feature("upcoming"));
+  if (typeWrap) {
+    typeWrap.querySelectorAll(".seg").forEach((b) => {
+      b.classList.toggle("on", b.dataset.type === ui.type);
+      b.classList.toggle("hidden", (b.dataset.type === "income" && !feature("income")) || (b.dataset.type === "expense" && !feature("expenses")));
+    });
+  }
+  const payWrap = $("payment-date-wrap");
+  if (payWrap) payWrap.classList.toggle("hidden", ui.type !== "expense" || !feature("upcoming"));
   const canMove = feature("expenses") || feature("income");
-  $("form-card").classList.toggle("hidden", !canMove);
-  $("fab").classList.toggle("hidden", !canMove);
+  const formCard = $("form-card");
+  const fab = $("fab");
+  if (formCard) formCard.classList.toggle("hidden", !canMove);
+  if (fab) fab.classList.toggle("hidden", !canMove);
+  const bankWrap = $("move-bank-wrap");
+  const bankSelect = $("move-bank");
+  if (bankWrap) bankWrap.classList.toggle("hidden", !banks().length);
+  if (bankSelect) {
+    const selected = ui.bankId || banks()[0]?.id || "";
+    bankSelect.innerHTML = banks().map((b) => (
+      `<option value="${esc(b.id)}" ${b.id === selected ? "selected" : ""}>${esc(b.name)}</option>`
+    )).join("");
+  }
   renderChips();
+}
+
+function bankOptionsHtml(selectedId) {
+  return `<option value="">Sin cuenta</option>` + banks().map((b) => (
+    `<option value="${esc(b.id)}" ${b.id === selectedId ? "selected" : ""}>${esc(b.name)}</option>`
+  )).join("");
+}
+
+function renderBanks() {
+  const list = banks();
+  const chips = $("bank-chips");
+  const box = $("bank-list");
+  if (chips) {
+    chips.innerHTML = `<button type="button" class="chip ${ui.bankId ? "" : "on"}" data-action="select-bank" data-id="">Todas</button>` +
+      list.map((b) => `<button type="button" class="chip ${ui.bankId === b.id ? "on" : ""}" data-action="select-bank" data-id="${b.id}">${esc(b.name)}</button>`).join("");
+  }
+  if (box) {
+    box.innerHTML = list.length ? list.map((b) => `
+      <div class="bank-item ${ui.bankId === b.id ? "on" : ""}">
+        <header>
+          <button type="button" class="bank-pick" data-action="select-bank" data-id="${b.id}">${esc(b.name)}</button>
+          <button class="icon-btn" type="button" data-action="del-bank" data-id="${b.id}" aria-label="Quitar cuenta">✕</button>
+        </header>
+        ${db.settings.hideRemain
+          ? `<div class="bank-hidden">${hiddenMoney()}</div>`
+          : `<input data-bank-balance="${b.id}" inputmode="decimal" value="${Number(b.balance) || 0}" aria-label="Saldo ${esc(b.name)}" />`}
+      </div>`).join("") : `<p class="empty">Agregá tus bancos o billeteras y el saldo que tenés en cada uno.</p>`;
+  }
 }
 
 function moveItemHtml(m) {
   const cat = categoryById(m.categoryId);
   const extra = [];
   extra.push(parseISO(m.date).toLocaleDateString("es-AR"));
+  if (m.bankId && bankById(m.bankId)) extra.push(bankById(m.bankId).name);
   if (m.paymentDate) extra.push("paga " + parseISO(m.paymentDate).toLocaleDateString("es-AR"));
   if (m.note) extra.push(m.note);
   return `<li>
@@ -329,78 +418,106 @@ function moveItemHtml(m) {
 
 function renderDashboard() {
   fillForm();
-  const income = sum(movementsInMonth(ui.month, "income"));
-  const expense = sum(movementsInMonth(ui.month, "expense"));
+  renderBanks();
+  const income = sum(movementsScoped(ui.month, "income"));
+  const expense = sum(movementsScoped(ui.month, "expense"));
+  const remain = remainAmount();
+  const selectedBank = bankById(ui.bankId);
   $("kpi-income").textContent = money(income);
   $("kpi-expense").textContent = money(expense);
-  $("kpi-remain").textContent = money(income - expense);
-  $("kpi-remain").style.color = income - expense < 0 ? "var(--danger)" : "";
+  $("kpi-remain").textContent = moneyOrHidden(remain);
+  $("kpi-remain").classList.toggle("is-hidden-money", !!db.settings.hideRemain);
+  $("kpi-remain").style.color = remain < 0 && !db.settings.hideRemain ? "var(--danger)" : "";
+  const remainSub = $("kpi-remain-sub");
+  if (remainSub) {
+    remainSub.textContent = selectedBank
+      ? ("Saldo en " + selectedBank.name)
+      : (banks().length ? "Suma de tus cuentas, después de ingresos y gastos" : "Cargá una cuenta para ver lo que te queda");
+  }
+  const hideBtn = $("hide-remain-btn");
+  if (hideBtn) hideBtn.textContent = db.settings.hideRemain ? "Mostrar" : "Ocultar";
 
   const byCat = {};
-  movementsInMonth(ui.month, "expense").forEach((m) => {
+  movementsScoped(ui.month, "expense").forEach((m) => {
     byCat[m.categoryId] = (byCat[m.categoryId] || 0) + m.amount;
   });
-  const segments = Object.entries(byCat)
-    .map(([id, value]) => ({ id, value, name: categoryById(id)?.name || "Otros", color: categoryById(id)?.color || "#888" }))
-    .sort((a, b) => b.value - a.value);
-  drawDonut($("donut"), segments, money(expense), "gastos");
-  const total = segments.reduce((a, s) => a + s.value, 0) || 1;
-  $("legend").innerHTML = segments.map((s) => (
-    `<li><span><b style="background:${s.color}"></b>${esc(s.name)}</span><span>${Math.round((s.value / total) * 100)}%</span></li>`
-  )).join("") || `<li class="empty">Todavía no hay gastos este mes.</li>`;
-
-  const bars = [];
-  for (let i = 5; i >= 0; i -= 1) {
-    const ym = shiftMonth(ui.month, -i);
-    const dt = parseISO(ym + "-01");
-    bars.push({
-      label: MONTHS_SHORT[dt.getMonth()],
-      value: sum(movementsInMonth(ym, "expense")),
-      highlight: i === 0,
-      topLabel: i === 0 ? money(sum(movementsInMonth(ym, "expense"))) : ""
-    });
-  }
-  drawBars($("bars"), bars);
-
-  $("predict-card").classList.toggle("hidden", !feature("prediction"));
-  if (feature("prediction")) {
-    const p = prediction();
-    $("predict-value").textContent = money(p.projectedRemain);
-    const trend = p.vsAvg > 0 ? "vas un poco arriba del promedio de los últimos meses" : "vas alineado o debajo de tu promedio";
-    $("predict-copy").textContent = `Si seguís este ritmo, el mes cerraría con ${money(p.projectedExpenses)} de gastos. ${trend}.`;
-  }
-
-  $("budgets-card").classList.toggle("hidden", !feature("budgets") || !feature("expenses"));
-  if (feature("budgets")) {
-    $("budgets").innerHTML = cats("expense").map((c) => {
-      const spent = byCat[c.id] || 0;
-      const budget = Number(db.budgets[c.id] || 0);
-      const over = budget > 0 && spent > budget;
-      const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
-      const meta = budget ? `${money(spent)} / ${money(budget)}` : `${money(spent)} · sin tope`;
-      return `<div class="budget ${over ? "over" : ""}">
-        <header>
-          <span>${esc(c.name)}</span>
-          <input data-budget="${c.id}" inputmode="decimal" value="${budget || ""}" placeholder="0" />
-        </header>
-        <div class="bar"><span style="width:${budget ? pct : 0}%"></span></div>
-        <div class="meta">${meta}${over ? " · te pasaste" : ""}</div>
-      </div>`;
-    }).join("");
-  }
-
-  const filter = $("move-filter").value;
-  let moves = movementsInMonth(ui.month).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || "").localeCompare(a.createdAt || ""));
+  const filterEl = $("move-filter");
+  const filter = filterEl ? filterEl.value : "all";
+  let moves = movementsScoped(ui.month).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || "").localeCompare(a.createdAt || ""));
   if (filter === "expense" || filter === "income") moves = moves.filter((m) => m.type === filter);
   if (filter === "unpaid") moves = moves.filter((m) => m.paymentDate && m.paymentDate >= todayISO());
-  $("moves").innerHTML = moves.length ? moves.map(moveItemHtml).join("") : `<li class="empty">No hay movimientos en este mes.</li>`;
+  const movesEl = $("moves");
+  if (movesEl) movesEl.innerHTML = moves.length ? moves.map(moveItemHtml).join("") : `<li class="empty">No hay movimientos en este mes.</li>`;
+
+  try {
+    const segments = Object.entries(byCat)
+      .map(([id, value]) => ({ id, value, name: categoryById(id)?.name || "Otros", color: categoryById(id)?.color || "#888" }))
+      .sort((a, b) => b.value - a.value);
+    drawDonut($("donut"), segments, money(expense), "gastos");
+    const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+    const legend = $("legend");
+    if (legend) {
+      legend.innerHTML = segments.length ? segments.map((s) => (
+        `<li><span><b style="background:${s.color}"></b>${esc(s.name)}</span><span>${Math.round((s.value / total) * 100)}%</span></li>`
+      )).join("") : `<li class="empty">Todavía no hay gastos este mes.</li>`;
+    }
+    const bars = [];
+    for (let i = 5; i >= 0; i -= 1) {
+      const ym = shiftMonth(ui.month, -i);
+      const dt = parseISO(ym + "-01");
+      bars.push({
+        label: MONTHS_SHORT[dt.getMonth()],
+        value: sum(movementsScoped(ym, "expense")),
+        highlight: i === 0,
+        topLabel: i === 0 ? money(sum(movementsScoped(ym, "expense"))) : ""
+      });
+    }
+    drawBars($("bars"), bars);
+  } catch (err) {
+    console.error(err);
+  }
+
+  const predictCard = $("predict-card");
+  if (predictCard) {
+    predictCard.classList.toggle("hidden", !feature("prediction"));
+    if (feature("prediction")) {
+      const p = prediction();
+      const predictValue = $("predict-value");
+      const predictCopy = $("predict-copy");
+      if (predictValue) predictValue.textContent = money(p.projectedRemain);
+      const trend = p.vsAvg > 0 ? "vas un poco arriba del promedio de los últimos meses" : "vas alineado o debajo de tu promedio";
+      if (predictCopy) predictCopy.textContent = `Si seguís este ritmo, el mes cerraría con ${money(p.projectedExpenses)} de gastos. ${trend}.`;
+    }
+  }
+
+  const budgetsCard = $("budgets-card");
+  if (budgetsCard) {
+    budgetsCard.classList.toggle("hidden", !feature("budgets") || !feature("expenses"));
+    if (feature("budgets") && $("budgets")) {
+      $("budgets").innerHTML = cats("expense").map((c) => {
+        const spent = byCat[c.id] || 0;
+        const budget = Number(db.budgets[c.id] || 0);
+        const over = budget > 0 && spent > budget;
+        const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+        const meta = budget ? `${money(spent)} / ${money(budget)}` : `${money(spent)} · sin tope`;
+        return `<div class="budget ${over ? "over" : ""}">
+          <header>
+            <span>${esc(c.name)}</span>
+            <input data-budget="${c.id}" inputmode="decimal" value="${budget || ""}" placeholder="0" />
+          </header>
+          <div class="bar"><span style="width:${budget ? pct : 0}%"></span></div>
+          <div class="meta">${meta}${over ? " · te pasaste" : ""}</div>
+        </div>`;
+      }).join("");
+    }
+  }
 }
 
 function renderReports() {
   document.querySelectorAll("#report-period .seg").forEach((b) => b.classList.toggle("on", b.dataset.period === ui.reportPeriod));
   const { from, to, title } = periodBounds(ui.reportPeriod, ui.reportAnchor);
   $("report-title").textContent = title;
-  const list = db.movements.filter((m) => inRange(m.date, from, to));
+  const list = db.movements.filter((m) => inRange(m.date, from, to) && (!ui.bankId || m.bankId === ui.bankId));
   const income = sum(list.filter((m) => m.type === "income"));
   const expense = sum(list.filter((m) => m.type === "expense"));
   $("rep-income").textContent = money(income);
@@ -412,7 +529,7 @@ function renderReports() {
     const year = parseISO(from).getFullYear();
     for (let i = 0; i < 12; i += 1) {
       const ym = year + "-" + String(i + 1).padStart(2, "0");
-      items.push({ label: MONTHS_SHORT[i], value: sum(movementsInMonth(ym, "expense")), highlight: ym === ymNow() });
+      items.push({ label: MONTHS_SHORT[i], value: sum(movementsScoped(ym, "expense")), highlight: ym === ymNow() });
     }
     drawBars($("report-chart"), items);
   } else if (ui.reportPeriod === "week") {
@@ -492,6 +609,8 @@ function renderUpcoming() {
 function renderSettings() {
   $("set-name").value = db.settings.displayName || "";
   $("set-currency").value = db.settings.currency || "ARS";
+  const hideRemain = $("set-hide-remain");
+  if (hideRemain) hideRemain.checked = !!db.settings.hideRemain;
   document.querySelectorAll("[data-feature]").forEach((el) => {
     if (el.type === "checkbox") el.checked = feature(el.dataset.feature);
   });
@@ -509,6 +628,7 @@ function setupState() {
       features: { ...db.settings.features },
       categories: DEFAULT_EXPENSE_CATEGORIES.map((c) => ({ ...c, selected: true })),
       extraCat: "",
+      banks: banks().length ? banks().map((b) => ({ id: b.id, name: b.name, amount: b.balance })) : [],
       salary: { ...db.settings.salary }
     };
   }
@@ -520,9 +640,9 @@ function renderSetup() {
   const kicker = $("setup-kicker");
   const box = $("setup-step");
   $("setup-back").classList.toggle("hidden", ui.setupStep === 0);
-  $("setup-next").textContent = ui.setupStep === 3 ? "Empezar" : "Seguir";
+  $("setup-next").textContent = ui.setupStep === 4 ? "Empezar" : "Seguir";
   if (ui.setupStep === 0) {
-    kicker.textContent = "Paso 1 de 4";
+    kicker.textContent = "Paso 1 de 5";
     box.innerHTML = `
       <h1>Tus finanzas, en este dispositivo</h1>
       <p class="muted">La info se guarda acá, aunque la app esté en GitHub Pages. Si cerrás Safari y volvés, sigue todo.</p>
@@ -533,7 +653,19 @@ function renderSetup() {
         </select>
       </label>`;
   } else if (ui.setupStep === 1) {
-    kicker.textContent = "Paso 2 de 4";
+    kicker.textContent = "Paso 2 de 5";
+    box.innerHTML = `<h1>¿Dónde tenés el dinero?</h1>
+      <p class="muted">Cuentas de banco, Mercado Pago, efectivo. El “te queda” sale de acá, después de tus movimientos.</p>
+      <div class="chips">${COMMON_BANKS.map((name) => `<button type="button" class="chip" data-action="setup-quick-bank" data-name="${esc(name)}">${esc(name)}</button>`).join("")}</div>
+      <div class="setup-banks" id="setup-banks">${s.banks.map((b, i) => `
+        <div class="setup-bank-row">
+          <input data-setup-bank-name="${i}" value="${esc(b.name)}" placeholder="Banco" />
+          <input data-setup-bank-amount="${i}" inputmode="decimal" value="${b.amount || ""}" placeholder="Saldo" />
+          <button type="button" class="icon-btn" data-action="setup-del-bank" data-index="${i}">✕</button>
+        </div>`).join("")}</div>
+      <button type="button" class="btn ghost" data-action="setup-add-bank">+ Otra cuenta</button>`;
+  } else if (ui.setupStep === 2) {
+    kicker.textContent = "Paso 3 de 5";
     const opts = [
       ["expenses", "Gastos y categorías"],
       ["income", "Ingresos"],
@@ -545,13 +677,13 @@ function renderSetup() {
     ];
     box.innerHTML = `<h1>¿Qué querés manejar?</h1><p class="muted">Elegí ahora. Después lo podés cambiar en Ajustes.</p>
       <div class="setup-options">${opts.map(([k,l]) => `<label><input type="checkbox" data-setup-feature="${k}" ${s.features[k] !== false ? "checked" : ""}/> ${l}</label>`).join("")}</div>`;
-  } else if (ui.setupStep === 2) {
-    kicker.textContent = "Paso 3 de 4";
+  } else if (ui.setupStep === 3) {
+    kicker.textContent = "Paso 4 de 5";
     box.innerHTML = `<h1>Categorías de gastos</h1><p class="muted">Desmarcá las que no uses o sumá una nueva.</p>
       <div class="cat-pick">${s.categories.map((c,i) => `<label><input type="checkbox" data-setup-cat="${i}" ${c.selected?"checked":""}/> ${esc(c.name)}</label>`).join("")}</div>
       <label class="field"><span>Otra categoría</span><input id="setup-extra-cat" value="${esc(s.extraCat)}" placeholder="Ej. Mascotas" /></label>`;
   } else {
-    kicker.textContent = "Paso 4 de 4";
+    kicker.textContent = "Paso 5 de 5";
     box.innerHTML = `<h1>Ingreso que está por llegar</h1>
       <p class="muted">Si cobrás sueldo un día fijo, lo vamos a mostrar como ingreso próximo hasta que lo registres.</p>
       <label class="check"><input type="checkbox" id="setup-salary-on" ${s.salary.enabled?"checked":""}/> Tengo un ingreso mensual</label>
@@ -561,6 +693,20 @@ function renderSetup() {
   }
 }
 
+function collectSetupBanks() {
+  const s = setupState();
+  const names = document.querySelectorAll("[data-setup-bank-name]");
+  if (!names.length) return;
+  s.banks = Array.from(names).map((el, i) => {
+    const amountEl = document.querySelector(`[data-setup-bank-amount="${i}"]`);
+    return {
+      id: s.banks[i]?.id || uid(),
+      name: el.value.trim(),
+      amount: parseAmount(amountEl && amountEl.value) || 0
+    };
+  }).filter((b) => b.name);
+}
+
 function collectSetup() {
   const s = setupState();
   if (ui.setupStep === 0) {
@@ -568,13 +714,16 @@ function collectSetup() {
     s.currency = $("setup-currency")?.value || "ARS";
   }
   if (ui.setupStep === 1) {
-    document.querySelectorAll("[data-setup-feature]").forEach((el) => { s.features[el.dataset.setupFeature] = el.checked; });
+    collectSetupBanks();
   }
   if (ui.setupStep === 2) {
+    document.querySelectorAll("[data-setup-feature]").forEach((el) => { s.features[el.dataset.setupFeature] = el.checked; });
+  }
+  if (ui.setupStep === 3) {
     document.querySelectorAll("[data-setup-cat]").forEach((el) => { s.categories[Number(el.dataset.setupCat)].selected = el.checked; });
     s.extraCat = $("setup-extra-cat")?.value.trim() || "";
   }
-  if (ui.setupStep === 3) {
+  if (ui.setupStep === 4) {
     s.salary.enabled = $("setup-salary-on")?.checked || false;
     s.salary.label = $("setup-salary-label")?.value.trim() || "Sueldo";
     s.salary.amount = parseAmount($("setup-salary-amount")?.value) || 0;
@@ -596,60 +745,130 @@ function finishSetup() {
   }
   if (!picked.length) picked.push({ id: "cat_otros", name: "Otros", type: "expense", color: "#8a8a8a" });
   db.categories = [...picked, ...db.categories.filter((c) => c.type === "income")];
+  collectSetupBanks();
+  db.banks = (s.banks || []).filter((b) => b.name).map((b) => ({
+    id: b.id || uid(),
+    name: b.name,
+    balance: Number(b.amount) || 0
+  }));
   persist();
   document.documentElement.dataset.mode = "app";
   toast("Listo. Ya podés cargar movimientos.");
   render();
 }
 
-function addMovementFrom(root) {
-  const amount = parseAmount(root.querySelector("#amount").value);
+function addMovementFrom() {
+  const amountEl = $("amount");
+  const dateEl = $("move-date");
+  const noteEl = $("note");
+  const amount = parseAmount(amountEl && amountEl.value);
   if (!amount || amount <= 0) { toast("Ingresá un monto"); return; }
   if (!ui.categoryId) { toast("Elegí una categoría"); return; }
-  const date = root.querySelector("#move-date").value || todayISO();
-  const paymentDate = root.querySelector("#payment-date")?.value || "";
-  const note = root.querySelector("#note").value.trim();
+  const date = (dateEl && dateEl.value) || todayISO();
+  const paymentEl = $("payment-date");
+  const paymentDate = (paymentEl && paymentEl.value) || "";
+  const note = noteEl ? noteEl.value.trim() : "";
+  const bankEl = $("move-bank");
+  const bankId = (bankEl && bankEl.value) || ui.bankId || banks()[0]?.id || "";
+  if (banks().length && !bankId) { toast("Elegí una cuenta"); return; }
   db.movements.push({
     id: uid(),
     type: ui.type,
     amount,
     categoryId: ui.categoryId,
+    bankId,
     date,
     paymentDate: ui.type === "expense" ? paymentDate : "",
     note,
     createdAt: new Date().toISOString()
   });
+  applyBankDelta(bankId, ui.type, amount);
   persist();
-  root.querySelector("#amount").value = "";
-  root.querySelector("#note").value = "";
+  if (amountEl) amountEl.value = "";
+  if (noteEl) noteEl.value = "";
   toast("Movimiento guardado");
   closeSheet();
   render();
 }
 
 function openSheet() {
-  $("sheet-panel").appendChild($("form-card"));
-  if (!$("move-date").value) $("move-date").value = todayISO();
+  ui.view = "dashboard";
+  render();
+  document.body.classList.add("sheet-open");
+  const sheet = $("sheet");
+  if (sheet) sheet.classList.remove("hidden");
+  const dateEl = $("move-date");
+  if (dateEl && !dateEl.value) dateEl.value = todayISO();
   fillForm();
-  $("sheet").classList.remove("hidden");
 }
 
 function closeSheet() {
-  const dash = $("view-dashboard");
-  dash.insertBefore($("form-card"), dash.firstChild);
-  $("sheet").classList.add("hidden");
+  document.body.classList.remove("sheet-open");
+  const sheet = $("sheet");
+  if (sheet) sheet.classList.add("hidden");
 }
 
 function openEdit(id) {
   const m = db.movements.find((x) => x.id === id);
-  if (!m) return;
   const form = $("edit-form");
-  form.moveId.value = m.id;
-  form.amount.value = m.amount;
-  form.date.value = m.date;
-  form.paymentDate.value = m.paymentDate || "";
-  form.note.value = m.note || "";
-  $("edit-dialog").showModal();
+  const dialog = $("edit-dialog");
+  if (!m || !form || !dialog) return;
+  const moveId = field(form, "moveId");
+  const amount = field(form, "amount");
+  const date = field(form, "date");
+  const paymentDate = field(form, "paymentDate");
+  const note = field(form, "note");
+  if (moveId) moveId.value = m.id;
+  if (amount) amount.value = m.amount;
+  const bankSelect = field(form, "bankId");
+  if (bankSelect) bankSelect.innerHTML = bankOptionsHtml(m.bankId);
+  if (date) date.value = m.date;
+  if (paymentDate) paymentDate.value = m.paymentDate || "";
+  if (note) note.value = m.note || "";
+  dialog.showModal();
+}
+
+function field(form, name) {
+  return form && form.elements ? form.elements[name] : null;
+}
+
+function addDebt(form) {
+  const fd = new FormData(form);
+  const total = parseAmount(fd.get("total"));
+  const remaining = parseAmount(fd.get("remaining"));
+  if (!total) { toast("Monto inválido"); return; }
+  db.debts.push({
+    id: uid(),
+    name: String(fd.get("name") || "").trim(),
+    total,
+    remaining: Number.isFinite(remaining) ? remaining : total,
+    dueDate: fd.get("dueDate"),
+    note: String(fd.get("note") || "").trim(),
+    createdAt: new Date().toISOString()
+  });
+  form.reset();
+  persist();
+  toast("Deuda guardada");
+  render();
+}
+
+function addUpcoming(form) {
+  const fd = new FormData(form);
+  const amount = parseAmount(fd.get("amount"));
+  if (!amount) { toast("Monto inválido"); return; }
+  const recurring = field(form, "recurring");
+  db.upcoming.push({
+    id: uid(),
+    type: fd.get("type"),
+    name: String(fd.get("name") || "").trim(),
+    amount,
+    date: fd.get("date"),
+    recurring: recurring && recurring.checked ? "monthly" : null
+  });
+  form.reset();
+  persist();
+  toast("Guardado en próximos");
+  render();
 }
 
 function bind() {
@@ -659,14 +878,50 @@ function bind() {
     const action = btn.dataset.action;
     if (action === "setup-next") {
       collectSetup();
-      if (ui.setupStep < 3) { ui.setupStep += 1; renderSetup(); }
+      if (ui.setupStep < 4) { ui.setupStep += 1; renderSetup(); }
       else finishSetup();
     }
+    if (action === "setup-quick-bank") {
+      collectSetupBanks();
+      const s = setupState();
+      const name = btn.dataset.name;
+      if (name && !s.banks.some((b) => b.name.toLowerCase() === name.toLowerCase())) {
+        s.banks.push({ id: uid(), name, amount: "" });
+      }
+      renderSetup();
+    }
+    if (action === "setup-add-bank") {
+      collectSetupBanks();
+      setupState().banks.push({ id: uid(), name: "", amount: "" });
+      renderSetup();
+    }
+    if (action === "setup-del-bank") {
+      collectSetupBanks();
+      setupState().banks.splice(Number(btn.dataset.index), 1);
+      renderSetup();
+    }
+    if (action === "select-bank") {
+      ui.bankId = btn.dataset.id || "";
+      render();
+    }
+    if (action === "del-bank") {
+      const id = btn.dataset.id;
+      if (!confirm("¿Quitar esta cuenta? Los movimientos quedan, el saldo de la cuenta no.")) return;
+      db.banks = banks().filter((b) => b.id !== id);
+      if (ui.bankId === id) ui.bankId = "";
+      persist();
+      render();
+    }
+    if (action === "toggle-hide-remain") {
+      db.settings.hideRemain = !db.settings.hideRemain;
+      persist();
+      render();
+    }
     if (action === "setup-back") { collectSetup(); ui.setupStep = Math.max(0, ui.setupStep - 1); renderSetup(); }
-    if (action === "view") setView(btn.dataset.view);
+    if (action === "view") { closeSheet(); setView(btn.dataset.view); }
     if (action === "set-type") { ui.type = btn.dataset.type; fillForm(); }
     if (action === "cat") { ui.categoryId = btn.dataset.id; fillForm(); }
-    if (action === "add-movement") addMovementFrom(btn.closest(".form-card") || document);
+    if (action === "add-movement") addMovementFrom();
     if (action === "prev-month") { ui.month = shiftMonth(ui.month, -1); render(); }
     if (action === "next-month") { ui.month = shiftMonth(ui.month, 1); render(); }
     if (action === "report-period") { ui.reportPeriod = btn.dataset.period; render(); }
@@ -681,10 +936,12 @@ function bind() {
       const debt = db.debts.find((d) => d.id === btn.dataset.id);
       if (!debt || !amount || amount <= 0) { toast("Ingresá el pago"); return; }
       debt.remaining = Math.max(0, debt.remaining - amount);
+      const bankId = ui.bankId || banks()[0]?.id || "";
       db.movements.push({
         id: uid(), type: "expense", amount, categoryId: cats("expense")[0]?.id || "",
-        date: todayISO(), paymentDate: todayISO(), note: "Pago deuda: " + debt.name, createdAt: new Date().toISOString()
+        bankId, date: todayISO(), paymentDate: todayISO(), note: "Pago deuda: " + debt.name, createdAt: new Date().toISOString()
       });
+      applyBankDelta(bankId, "expense", amount);
       persist(); toast("Pago registrado"); render();
     }
     if (action === "del-debt") {
@@ -700,10 +957,12 @@ function bind() {
       if (!u) return;
       const type = u.type === "income" ? "income" : "expense";
       const cat = (type === "income" ? cats("income").find((c) => c.id === "cat_sueldo") : null) || cats(type)[0];
+      const bankId = ui.bankId || banks()[0]?.id || "";
       db.movements.push({
-        id: uid(), type, amount: u.amount, categoryId: cat?.id || "", date: u.date,
+        id: uid(), type, amount: u.amount, categoryId: cat?.id || "", bankId, date: u.date,
         paymentDate: type === "expense" ? u.date : "", note: u.name, createdAt: new Date().toISOString()
       });
+      applyBankDelta(bankId, type, u.amount);
       if (!u.virtual) db.upcoming = db.upcoming.filter((x) => x.id !== u.id);
       persist(); toast("Pasó a movimientos"); render();
     }
@@ -721,110 +980,117 @@ function bind() {
         ui.setup = null;
         ui.setupStep = 0;
         document.documentElement.dataset.mode = "setup";
+        closeSheet();
         render();
       }
     }
   });
 
-  $("move-filter").addEventListener("change", () => renderDashboard());
-  $("budgets").addEventListener("change", (e) => {
-    const id = e.target.dataset.budget;
-    if (!id) return;
-    const n = parseAmount(e.target.value);
-    db.budgets[id] = Number.isFinite(n) ? n : 0;
-    persist();
-    renderDashboard();
-  });
-  $("debt-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const total = parseAmount(fd.get("total"));
-    const remaining = parseAmount(fd.get("remaining"));
-    if (!total) { toast("Monto inválido"); return; }
-    db.debts.push({
-      id: uid(),
-      name: String(fd.get("name")).trim(),
-      total,
-      remaining: Number.isFinite(remaining) ? remaining : total,
-      dueDate: fd.get("dueDate"),
-      note: String(fd.get("note") || "").trim(),
-      createdAt: new Date().toISOString()
-    });
-    e.target.reset();
-    persist();
-    render();
-  });
-  $("upcoming-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const amount = parseAmount(fd.get("amount"));
-    if (!amount) { toast("Monto inválido"); return; }
-    db.upcoming.push({
-      id: uid(),
-      type: fd.get("type"),
-      name: String(fd.get("name")).trim(),
-      amount,
-      date: fd.get("date"),
-      recurring: e.target.recurring.checked ? "monthly" : null
-    });
-    e.target.reset();
-    persist();
-    render();
-  });
-  $("set-name").addEventListener("change", () => { db.settings.displayName = $("set-name").value.trim(); persist(); render(); });
-  $("set-currency").addEventListener("change", () => { db.settings.currency = $("set-currency").value; persist(); render(); });
-  document.querySelectorAll(".features [data-feature]").forEach((el) => {
-    el.addEventListener("change", () => {
-      db.settings.features[el.dataset.feature] = el.checked;
+  document.addEventListener("submit", (e) => {
+    if (e.target.id === "bank-form") {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get("name") || "").trim();
+      const balance = parseAmount(fd.get("balance"));
+      if (!name) { toast("Poné el nombre del banco"); return; }
+      if (!Number.isFinite(balance)) { toast("Poné el saldo"); return; }
+      db.banks = banks();
+      db.banks.push({ id: uid(), name, balance });
+      e.target.reset();
       persist();
+      toast("Cuenta agregada");
       render();
-    });
-  });
-  ["salary-enabled","salary-label","salary-amount","salary-day"].forEach((id) => {
-    $(id).addEventListener("change", () => {
-      db.settings.salary.enabled = $("salary-enabled").checked;
-      db.settings.salary.label = $("salary-label").value.trim() || "Sueldo";
-      db.settings.salary.amount = parseAmount($("salary-amount").value) || 0;
-      db.settings.salary.dayOfMonth = Number($("salary-day").value) || 1;
-      persist();
-    });
-  });
-  $("import-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      db = importJson(await file.text());
-      document.documentElement.dataset.mode = db.settings.setupComplete ? "app" : "setup";
-      toast("Backup restaurado");
-      render();
-    } catch {
-      toast("No se pudo importar");
     }
-  });
-  $("edit-form").addEventListener("submit", (e) => {
-    const value = e.submitter?.value;
-    const id = $("edit-form").moveId.value;
-    if (value === "delete") {
-      db.movements = db.movements.filter((m) => m.id !== id);
-      persist();
-      toast("Borrado");
+    if (e.target.id === "debt-form") {
+      e.preventDefault();
+      addDebt(e.target);
     }
-    if (value === "save") {
-      const m = db.movements.find((x) => x.id === id);
-      if (m) {
-        const amount = parseAmount($("edit-form").amount.value);
-        if (!amount) { e.preventDefault(); toast("Monto inválido"); return; }
-        m.amount = amount;
-        m.date = $("edit-form").date.value;
-        m.paymentDate = $("edit-form").paymentDate.value;
-        m.note = $("edit-form").note.value.trim();
+    if (e.target.id === "upcoming-form") {
+      e.preventDefault();
+      addUpcoming(e.target);
+    }
+    if (e.target.id === "edit-form") {
+      const value = e.submitter && e.submitter.value;
+      const idEl = field(e.target, "moveId");
+      const id = idEl ? idEl.value : "";
+      if (value === "delete") {
+        const old = db.movements.find((m) => m.id === id);
+        if (old) applyBankDelta(old.bankId, old.type === "income" ? "expense" : "income", old.amount);
+        db.movements = db.movements.filter((m) => m.id !== id);
         persist();
+        toast("Borrado");
+      }
+      if (value === "save") {
+        const m = db.movements.find((x) => x.id === id);
+        if (m) {
+          const amount = parseAmount(field(e.target, "amount") && field(e.target, "amount").value);
+          if (!amount) { e.preventDefault(); toast("Monto inválido"); return; }
+          applyBankDelta(m.bankId, m.type === "income" ? "expense" : "income", m.amount);
+          m.amount = amount;
+          m.bankId = field(e.target, "bankId") ? field(e.target, "bankId").value : m.bankId;
+          m.date = field(e.target, "date") ? field(e.target, "date").value : m.date;
+          m.paymentDate = field(e.target, "paymentDate") ? field(e.target, "paymentDate").value : "";
+          m.note = field(e.target, "note") ? field(e.target, "note").value.trim() : "";
+          applyBankDelta(m.bankId, m.type, m.amount);
+          persist();
+        }
       }
     }
   });
-  $("edit-dialog").addEventListener("close", () => render());
+
+  document.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.id === "move-filter") renderDashboard();
+    if (t.id === "set-hide-remain") {
+      db.settings.hideRemain = t.checked;
+      persist();
+      render();
+    }
+    if (t.dataset && t.dataset.bankBalance) {
+      const bank = bankById(t.dataset.bankBalance);
+      const n = parseAmount(t.value);
+      if (bank && Number.isFinite(n)) {
+        bank.balance = n;
+        persist();
+        renderDashboard();
+      }
+    }
+    if (t.dataset && t.dataset.budget) {
+      const n = parseAmount(t.value);
+      db.budgets[t.dataset.budget] = Number.isFinite(n) ? n : 0;
+      persist();
+      renderDashboard();
+    }
+    if (t.id === "set-name") { db.settings.displayName = t.value.trim(); persist(); render(); }
+    if (t.id === "set-currency") { db.settings.currency = t.value; persist(); render(); }
+    if (t.dataset && t.dataset.feature && t.type === "checkbox" && t.closest(".features")) {
+      db.settings.features[t.dataset.feature] = t.checked;
+      persist();
+      render();
+    }
+    if (t.id === "salary-enabled" || t.id === "salary-label" || t.id === "salary-amount" || t.id === "salary-day") {
+      db.settings.salary.enabled = $("salary-enabled") ? $("salary-enabled").checked : false;
+      db.settings.salary.label = $("salary-label") && $("salary-label").value.trim() || "Sueldo";
+      db.settings.salary.amount = parseAmount($("salary-amount") && $("salary-amount").value) || 0;
+      db.settings.salary.dayOfMonth = Number($("salary-day") && $("salary-day").value) || 1;
+      persist();
+    }
+    if (t.id === "import-file") {
+      const file = t.files && t.files[0];
+      if (!file) return;
+      file.text().then((text) => {
+        db = importJson(text);
+        document.documentElement.dataset.mode = db.settings.setupComplete ? "app" : "setup";
+        toast("Backup restaurado");
+        render();
+      }).catch(() => toast("No se pudo importar"));
+    }
+  });
+
+  const editDialog = $("edit-dialog");
+  if (editDialog) editDialog.addEventListener("close", () => render());
   window.addEventListener("resize", () => {
-    if (!$("app").classList.contains("hidden") && ui.view === "dashboard") renderDashboard();
+    if (ui.view === "dashboard") renderDashboard();
     if (ui.view === "reports") renderReports();
   });
 }
@@ -837,14 +1103,24 @@ function registerPwa() {
 }
 
 function boot() {
-  $("move-date").value = todayISO();
-  const today = new Date();
-  $("upcoming-form").date.value = todayISO();
-  const debtDate = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
-  $("debt-form").dueDate.value = toISO(debtDate);
   bind();
+  const today = new Date();
+  const moveDate = $("move-date");
+  if (moveDate) moveDate.value = todayISO();
+  const upDate = document.querySelector("#upcoming-form [name='date']");
+  if (upDate) upDate.value = todayISO();
+  const debtDate = document.querySelector("#debt-form [name='dueDate']");
+  if (debtDate) {
+    const next = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+    debtDate.value = toISO(next);
+  }
   registerPwa();
-  render();
+  try {
+    render();
+  } catch (err) {
+    console.error(err);
+    toast("Hubo un error al mostrar la pantalla");
+  }
 }
 
 boot();

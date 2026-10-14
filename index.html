@@ -12,6 +12,11 @@
   <title>Finanzas</title>
   <script>
     (function () {
+      var path = location.pathname;
+      if (path && !path.endsWith("/") && !/\.[a-z0-9]+$/i.test(path.split("/").pop())) {
+        location.replace(path + "/" + location.search + location.hash);
+        return;
+      }
       try {
         var db = JSON.parse(localStorage.getItem("finanzas-app-v1") || "{}");
         document.documentElement.dataset.mode = db && db.settings && db.settings.setupComplete ? "app" : "setup";
@@ -26,9 +31,9 @@
   <link rel="stylesheet" href="./css/styles.css" />
 </head>
 <body>
-  <div id="onboarding" class="onboarding hidden">
+  <div id="onboarding" class="onboarding">
     <div class="onboarding-card">
-      <p class="step-kicker" id="setup-kicker">Paso 1 de 4</p>
+      <p class="step-kicker" id="setup-kicker">Paso 1 de 5</p>
       <div id="setup-step"></div>
       <div class="onboarding-nav">
         <button class="btn ghost hidden" type="button" data-action="setup-back" id="setup-back">Atrás</button>
@@ -37,7 +42,7 @@
     </div>
   </div>
 
-  <div id="app" class="app hidden">
+  <div id="app" class="app">
     <header class="topbar">
       <div>
         <p class="brand">Finanzas</p>
@@ -68,6 +73,20 @@
     </section>
 
     <main id="view-dashboard" class="view dashboard">
+      <article class="card banks-card" id="banks-card">
+        <div class="row-head">
+          <h2>Cuentas</h2>
+          <p>El dinero que tenés vive acá. Elegí un banco para verlo.</p>
+        </div>
+        <div class="bank-chips" id="bank-chips"></div>
+        <div class="bank-list" id="bank-list"></div>
+        <form class="bank-form" id="bank-form">
+          <input name="name" required placeholder="Banco o billetera (Galicia, Mercado Pago...)" />
+          <input name="balance" inputmode="decimal" required placeholder="Saldo actual" />
+          <button class="btn primary compact" type="submit">Agregar cuenta</button>
+        </form>
+      </article>
+
       <aside class="card form-card" id="form-card">
         <h2>Cargar movimiento</h2>
         <div class="segmented" id="type-toggle">
@@ -79,6 +98,10 @@
           <input id="amount" inputmode="decimal" autocomplete="off" placeholder="0" />
         </label>
         <div class="chips" id="category-chips"></div>
+        <label class="field" id="move-bank-wrap">
+          <span>Cuenta / banco</span>
+          <select id="move-bank"></select>
+        </label>
         <label class="field">
           <span>Fecha de consumo / movimiento</span>
           <input type="date" id="move-date" />
@@ -105,8 +128,12 @@
             <strong id="kpi-expense">$ 0</strong>
           </article>
           <article class="card kpi remain">
-            <p>Te queda</p>
-            <strong id="kpi-remain">$ 0</strong>
+            <div class="kpi-head">
+              <p>Te queda</p>
+              <button class="hide-btn" type="button" data-action="toggle-hide-remain" id="hide-remain-btn" aria-label="Ocultar te queda">Ocultar</button>
+            </div>
+            <strong id="kpi-remain">$****</strong>
+            <span class="kpi-sub" id="kpi-remain-sub"></span>
           </article>
         </div>
 
@@ -243,6 +270,10 @@
             <option value="BRL">Real (BRL)</option>
           </select>
         </label>
+        <fieldset class="salary-box">
+          <legend>Privacidad</legend>
+          <label class="check"><input type="checkbox" id="set-hide-remain" /> Ocultar “Te queda” y saldos de cuentas ($****)</label>
+        </fieldset>
         <fieldset class="features">
           <legend>Qué registrar</legend>
           <label><input type="checkbox" data-feature="expenses" /> Gastos</label>
@@ -296,6 +327,7 @@
       <h3>Editar movimiento</h3>
       <input type="hidden" name="moveId" />
       <label class="field"><span>Monto</span><input name="amount" inputmode="decimal" required /></label>
+      <label class="field"><span>Cuenta</span><select name="bankId"></select></label>
       <label class="field"><span>Fecha</span><input name="date" type="date" required /></label>
       <label class="field"><span>Fecha de pago</span><input name="paymentDate" type="date" /></label>
       <label class="field"><span>Nota</span><input name="note" maxlength="80" /></label>
@@ -308,6 +340,8 @@
   </dialog>
 
   <div id="toast" class="toast hidden"></div>
-  <script type="module" src="./js/app.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

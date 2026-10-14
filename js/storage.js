@@ -1,6 +1,6 @@
 const STORAGE_KEY = "finanzas-app-v1";
 
-export const DEFAULT_EXPENSE_CATEGORIES = [
+const DEFAULT_EXPENSE_CATEGORIES = [
   { id: "cat_super", name: "Supermercado", type: "expense", color: "#e85c2a" },
   { id: "cat_comida", name: "Comidas afuera", type: "expense", color: "#f0a05a" },
   { id: "cat_trans", name: "Transporte", type: "expense", color: "#4aa3df" },
@@ -13,18 +13,18 @@ export const DEFAULT_EXPENSE_CATEGORIES = [
   { id: "cat_otros", name: "Otros", type: "expense", color: "#8a8a8a" }
 ];
 
-export const DEFAULT_INCOME_CATEGORIES = [
+const DEFAULT_INCOME_CATEGORIES = [
   { id: "cat_sueldo", name: "Sueldo", type: "income", color: "#5ecf8a" },
   { id: "cat_free", name: "Freelance", type: "income", color: "#4aa3df" },
   { id: "cat_ing_otros", name: "Otros ingresos", type: "income", color: "#e8c547" }
 ];
 
-export function uid() {
+function uid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return "id-" + Date.now().toString(16) + "-" + Math.random().toString(16).slice(2);
 }
 
-export function createInitialState() {
+function createInitialState() {
   return {
     version: 1,
     settings: {
@@ -46,9 +46,11 @@ export function createInitialState() {
         amount: 0,
         dayOfMonth: 1,
         label: "Sueldo"
-      }
+      },
+      hideRemain: false
     },
     categories: [...DEFAULT_EXPENSE_CATEGORIES, ...DEFAULT_INCOME_CATEGORIES],
+    banks: [],
     movements: [],
     budgets: {},
     debts: [],
@@ -59,7 +61,7 @@ export function createInitialState() {
   };
 }
 
-export function load() {
+function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createInitialState();
@@ -70,15 +72,15 @@ export function load() {
   }
 }
 
-export function save(db) {
+function save(db) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
 
-export function exportJson(db) {
+function exportJson(db) {
   return JSON.stringify(db, null, 2);
 }
 
-export function importJson(text) {
+function importJson(text) {
   const parsed = JSON.parse(text);
   if (!parsed || typeof parsed !== "object") throw new Error("Archivo inválido");
   const db = migrate(parsed);
@@ -86,7 +88,7 @@ export function importJson(text) {
   return db;
 }
 
-export function clearAll() {
+function clearAll() {
   localStorage.removeItem(STORAGE_KEY);
 }
 
@@ -97,6 +99,7 @@ function migrate(data) {
     ...data,
     settings: { ...base.settings, ...(data.settings || {}) },
     categories: Array.isArray(data.categories) && data.categories.length ? data.categories : base.categories,
+    banks: Array.isArray(data.banks) ? data.banks : [],
     movements: Array.isArray(data.movements) ? data.movements : [],
     budgets: data.budgets && typeof data.budgets === "object" ? data.budgets : {},
     debts: Array.isArray(data.debts) ? data.debts : [],
@@ -105,6 +108,7 @@ function migrate(data) {
   };
   db.settings.features = { ...base.settings.features, ...(data.settings?.features || {}) };
   db.settings.salary = { ...base.settings.salary, ...(data.settings?.salary || {}) };
+  if (typeof db.settings.hideRemain !== "boolean") db.settings.hideRemain = false;
   db.version = 1;
   return db;
 }
